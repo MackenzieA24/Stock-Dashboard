@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1.6.1/dist/sockjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+    <style>
+        .stock-positive { color: #198754; font-weight: bold; }
+        .stock-negative { color: #dc3545; font-weight: bold; }
+        .status-badge { font-size: 0.8rem; }
+        .last-updated { font-size: 0.9rem; color: #6c757d; }
+    </style>
+</head>
+<body class="bg-light">
+<div class="container py-4">
+    <!-- Header -->
+    <div class="text-center mb-4">
+        <h1 class="display-5 fw-bold text-primary">
+            <i class="bi bi-graph-up"></i> Stock Dashboard
+        </h1>
+        <p class="lead text-muted">Real-time prices with 1-minute updates</p>
+    </div>
+
+    <!-- Status Bar -->
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <div class="card text-center">
+                <div class="card-body py-2">
+                    <small class="text-muted">Connection</small>
+                    <div>
+                        <span id="connectionStatus" class="badge bg-secondary status-badge">Connecting...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center">
+                <div class="card-body py-2">
+                    <small class="text-muted">Data Source</small>
+                    <div>
+                        <span id="dataSource" class="badge bg-warning status-badge">Checking...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center">
+                <div class="card-body py-2">
+                    <small class="text-muted">Next Update</small>
+                    <div>
+                        <span id="nextUpdate" class="badge bg-info status-badge">60s</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center">
+                <div class="card-body py-2">
+                    <small class="text-muted">Last Updated</small>
+                    <div class="last-updated" id="lastUpdateTime">--:--:--</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stocks Table -->
+    <div class="card shadow-sm">
+        <div class="card-header bg-white">
+            <h5 class="card-title mb-0">
+                <i class="bi bi-table"></i> Live Stock Prices
+            </h5>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead class="table-light">
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Price</th>
+                        <th>Change</th>
+                        <th>% Change</th>
+                        <th>Last Updated</th>
+                    </tr>
+                    </thead>
+                    <tbody id="stockData">
+                    <tr>
+                        <td colspan="5" class="text-center py-4 text-muted">
+                            <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                            Loading stock data...
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="text-center mt-4">
+        <small class="text-muted">
+            Built with Spring Boot & WebSockets • Updates every 60 seconds
+        </small>
+    </div>
+</div>
+
+<!-- Bootstrap JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+    let stompClient = null;
+    let isWebSocketConnected = false;
+    let countdownTimer = 60;
+    let countdownInterval;
+
+    window.onload = function() {
+        console.log("Initializing Stock Dashboard...");
+        connectWebSocket();
+        startCountdownTimer();
+    };
+
+    function connectWebSocket() {
+        updateConnectionStatus('Connecting...', 'secondary');
+
+        try {
+            const socket = new SockJS('/ws');
+            stompClient = Stomp.over(socket);
+            stompClient.debug = null;
+
+            stompClient.connect({}, function(frame) {
+                console.log('WebSocket Connected');
+                isWebSocketConnected = true;
+                updateConnectionStatus('Connected', 'success');
+
+                stompClient.subscribe('/topic/stocks', function(message) {
+                    try {
+                        const stocks = JSON.parse(message.body);
+                        updateStockTable(stocks);
+                        updateLastUpdatedTime();
+                        resetCountdownTimer();
+                    } catch (error) {
+                        console.error('Error parsing WebSocket message:', error);
+                    }
+                });
+
+            }, function(error) {
+                console.error('WebSocket connection failed:', error);
+                handleConnectionError();
+            });
+
+        } catch (error) {
+            console.error('Error creating WebSocket:', error);
+            handleConnectionError();
+        }
+    }
+
+    function handleConnectionError() {
+        isWebSocketConnected = false;
+        updateConnectionStatus('Disconnected', 'danger');
+        setTimeout(() => connectWebSocket(), 5000);
+    }
+
+    function updateConnectionStatus(status, badgeClass) {
+        const element = document.getElementById('connectionStatus');
+        element.textContent = status;
+        element.className = `badge bg-${badgeClass} status-badge`;
+    }
+
+    // helpful to watch for price change as expected
+    function startCountdownTimer() {
+        countdownInterval = setInterval(() => {
+            countdownTimer--;
+            if (countdownTimer <= 0) {
+                countdownTimer = 60;
+            }
+            updateCountdownDisplay();
+        }, 1000);
+    }
+
+    function resetCountdownTimer() {
+        countdownTimer = 60;
+        updateCountdownDisplay();
+    }
+
+    function updateCountdownDisplay() {
+        document.getElementById('nextUpdate').textContent = `${countdownTimer}s`;
+    }
+
+    function updateStockTable(stocks) {
+        const tbody = document.getElementById('stockData');
+
+        if (!stocks || stocks.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center py-4 text-muted">No stock data available</td></tr>';
+            return;
+        }
+
+        let html = '';
+        stocks.forEach(stock => {
+            const changeClass = stock.change >= 0 ? 'stock-positive' : 'stock-negative';
+            const changeIcon = stock.change >= 0 ? 'bi-arrow-up' : 'bi-arrow-down';
+
+            html += `
+                    <tr>
+                        <td><strong>${stock.symbol}</strong></td>
+                        <td class="fw-bold">$${stock.price.toFixed(2)}</td>
+                        <td class="${changeClass}">
+                            <i class="bi ${changeIcon} me-1"></i>
+                            ${stock.change.toFixed(2)}
+                        </td>
+                        <td class="${changeClass}">${stock.changePercent.toFixed(2)}%</td>
+                        <td class="text-muted">${new Date(stock.lastUpdated).toLocaleTimeString()}</td>
+                    </tr>
+                `;
+        });
+
+        tbody.innerHTML = html;
+    }
+
+    function updateLastUpdatedTime() {
+        document.getElementById('lastUpdateTime').textContent = new Date().toLocaleTimeString();
+    }
+
+    async function updateDataSourceInfo() {
+        try {
+            const response = await fetch('/api/stocks/data-source');
+            const info = await response.json();
+
+            const element = document.getElementById('dataSource');
+            if (info.usingRealData) {
+                element.textContent = 'Live Data';
+                element.className = 'badge bg-success status-badge';
+            } else {
+                element.textContent = 'Simulated';
+                element.className = 'badge bg-warning status-badge';
+            }
+        } catch (error) {
+            console.error('Error fetching data source info:', error);
+        }
+    }
+
+    setTimeout(updateDataSourceInfo, 2000);
+
+    window.onbeforeunload = function() {
+        if (stompClient !== null) {
+            stompClient.disconnect();
+        }
+        if (countdownInterval) {
+            clearInterval(countdownInterval);
+        }
+    };
+</script>
+</body>
+</html>
